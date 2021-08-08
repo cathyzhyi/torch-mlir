@@ -8,10 +8,6 @@ get_property(conversion_libs GLOBAL PROPERTY MLIR_CONVERSION_LIBS)
 target_link_libraries(npcomp-lsp-server PRIVATE
   MLIRLspServerLib
   NPCOMPInitAll
-
-  # TODO: Remove these in favor of interface deps.
-  ${dialect_libs}
-  ${conversion_libs}
 )
 
 mlir_check_all_link_libraries(npcomp-lsp-server)
