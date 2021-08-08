@@ -74,6 +74,10 @@ Diagnostics:
             with mb.module.context:
                 pm = PassManager.parse(pipeline_str)
                 pm.run(mb.module)
+                filename = os.path.join("/usr/local/google/home/cathyzhyi/tmp/",
+                                        scripted.original_name + '.mlir')
+                with open(filename, 'w') as f:
+                    f.write(asm_for_error_report)
         except Exception as e:
             # TODO: More robust.
             # - don't arbitrarily clutter up /tmp. When a test suite has many
@@ -100,6 +104,10 @@ $ npcomp-opt -{pipeline_str} {filename}
             sys.stderr = StringIO()
             asm_for_error_report = mb.module.operation.get_asm(
                 large_elements_limit=10, enable_debug_info=True)
+            filename = os.path.join("/usr/local/google/home/cathyzhyi/tmp/",
+                                    scripted.original_name + '_backend.mlir')
+            with open(filename, 'w') as f:
+                f.write(asm_for_error_report)
             return self.backend.compile(mb.module)
         except Exception as e:
             filename = os.path.join(tempfile.gettempdir(),
