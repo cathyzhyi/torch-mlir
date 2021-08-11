@@ -42,3 +42,10 @@ torch.nn_module {
   torch.slot "t1", %t : !torch.tensor
   torch.slot "t2", %t : !torch.tensor
 } : !torch.nn.Module<"c">
+builtin.func private @use_slot(%arg0 : !torch.nn.Module<"c">) -> !torch.tensor {
+  %t1 = torch.prim.GetAttr %arg0["t1"] : !torch.nn.Module<"c"> -> !torch.tensor
+  %t2 = torch.prim.GetAttr %arg0["t2"] : !torch.nn.Module<"c"> -> !torch.tensor
+  %cst = torch.constant.int 1
+  %ret = torch.aten.add.Tensor %t1, %t2, %cst : !torch.tensor, !torch.tensor, !torch.int -> !torch.tensor
+  return %ret : !torch.tensor
+}
