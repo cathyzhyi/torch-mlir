@@ -11,8 +11,8 @@ if [ "$#" -ne 2 ]; then
     exit 1
 fi
 
-venv_dir=$1
-serialized_test_dir=$2
+venv_dir=`readlink -f $1`
+serialized_test_dir=`readlink -f $2`
 here="$(realpath $(dirname $0))"
 torch_mlir_src_root="$here/../../"
 
