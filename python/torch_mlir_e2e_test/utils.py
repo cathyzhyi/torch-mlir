@@ -32,6 +32,19 @@ def run_pipeline_with_repro_report(module,
         # Lower module in place to make it ready for compiler backends.
         with module.context:
             pm = PassManager.parse(pipeline)
+            if "torchscript-module-to-torch-backend-pipeline" in pipeline:
+              filename = module_name + '_frontend.mlir'
+            elif "torch-backend-to-linalg-on-tensors-backend-pipeline" in pipeline:
+              filename = module_name + '_midend.mlir'
+            elif "refback-munge-calling-conventions" in pipeline:
+              filename = module_name + '_backend.mlir'
+            else:
+              assert("unhandled pipeline name in run_pipeline_with_repro_report")
+
+            filename = os.path.join("/usr/local/google/home/cathyzhyi/tmp/",
+                                    filename)
+            with open(filename, 'w') as f:
+                f.write(asm_for_error_report)
             pm.run(module)
     except Exception as e:
         # TODO: More robust.

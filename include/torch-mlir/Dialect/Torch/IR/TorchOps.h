@@ -108,6 +108,34 @@ m_TorchConstantIntList(SmallVectorImpl<int64_t> &bind_values) {
   return detail::torch_list_construct_op_binder(bind_values);
 }
 
+namespace detail {
+/// Matches the integer stored in a `torch.constant.int`.
+struct torch_tensor_size_int_op_binder {
+  int64_t *dim;
+  Value tensor;
+
+  /// Creates a matcher instance that binds the value to bv if match succeeds.
+  torch_tensor_size_int_op_binder(Value tensor, int64_t *dim)
+      : dim(dim), tensor(tensor) {}
+
+  bool match(Operation *op) {
+    if (auto atenSizeIntOp = dyn_cast<Torch::AtenSizeIntOp>(op)) {
+      if (atenSizeIntOp.self() == tensor) {
+        if (matchPattern(atenSizeIntOp.dim(), m_TorchConstantInt(dim)))
+          return true;
+      }
+    }
+    return false;
+  }
+};
+} // namespace detail
+
+/// Matches the integer stored in a `torch.constant.bool`.
+inline detail::torch_tensor_size_int_op_binder
+m_TorchTensorSizeInt(Value tensor, int64_t *dim) {
+  return detail::torch_tensor_size_int_op_binder(tensor, dim);
+}
+
 /// Create code to copy `tensor` to type `newType`.
 ///
 /// This involves two independent steps, which we keep orthogonal in our

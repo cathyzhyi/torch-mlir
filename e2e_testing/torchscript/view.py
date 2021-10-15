@@ -46,3 +46,39 @@ class ViewDynamicExpandModule(torch.nn.Module):
 def ViewDynamicExpandModule_basic(module, tu: TestUtils):
     module.forward(tu.rand(2, 4, 30, 384))
 
+
+# ==============================================================================
+class ViewRealDynamicExpandModule(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    @export
+    @annotate_args([
+        None,
+        ([-1, -1, -1], torch.float32, True),
+    ])
+
+    def forward(self, a):
+        return a.view(12, 32, a.size(1), a.size(2))
+
+@register_test_case(module_factory=lambda: ViewRealDynamicExpandModule())
+def ViewRealDynamicExpandModule_basic(module, tu: TestUtils):
+    module.forward(tu.rand(384, 2, 4))
+
+# ==============================================================================
+class ViewRealDynamicCollapseModule(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    @export
+    @annotate_args([
+        None,
+        ([-1, -1, -1, -1], torch.float32, True),
+    ])
+
+    def forward(self, a):
+        return a.view(384, a.size(2), a.size(3))
+
+@register_test_case(module_factory=lambda: ViewRealDynamicCollapseModule())
+def ViewRealDynamicCollapseModule_basic(module, tu: TestUtils):
+    module.forward(tu.rand(12, 32, 2, 4))

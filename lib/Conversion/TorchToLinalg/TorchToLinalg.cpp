@@ -2237,6 +2237,7 @@ public:
     Location loc = op.getLoc();
     Value input = adaptor.self();
     auto inputType = input.getType().cast<RankedTensorType>();
+    ArrayRef<int64_t> inputShape = inputType.getShape();
     int64_t inputRank = inputType.getRank();
     TypeConverter *typeConverter = getTypeConverter();
     auto resultType =
@@ -2247,11 +2248,9 @@ public:
     // TODO: Handle the cases of `aten.View` op where,
     // 1. One or multiple dimensions are collapsed.
     // 2. Few dimensions are expanded and few other dimensions are collapsed.
-    if (inputRank >= resultRank) {
-      return rewriter.notifyMatchFailure(
-          op, "unimplemented: operand tensor rank should be strictly less than "
-              "the desired output rank");
-    }
+    bool isCollapse = inputRank > resultRank ? true : false;
+    int64_t collapsedRank = isCollapse ? resultRank : inputRank;
+    int64_t expandedRank = isCollapse ? inputRank : resultRank;
 
     // Extract the desired output size as a list of integers. This list should
     // have been created using the operation `torch.prim.ListConstruct`.
@@ -2268,53 +2267,125 @@ public:
           op, "desired size list length mismatches with the result type rank");
     }
 
+    SmallVector<int64_t> resultShape(resultRank, kUnknownSize);
+    SmallVector<ReassociationIndices> reassociation(collapsedRank);
+    for (auto en : llvm::enumerate(expectedSizeTorchInt)) {
+      int64_t dim;
+      if (matchPattern(en.value(), m_TorchTensorSizeInt(op.self(), &dim))) {
+        auto collapsedDim = isCollapse ? en.index() : dim;
+        auto expandedDim = isCollapse ? dim : en.index();
+        reassociation[collapsedDim].push_back(expandedDim);
+        if (!inputType.isDynamicDim(dim)) {
+          resultShape[en.index()] = inputShape[dim];
+          continue;
+        }
+      }
+
+      int64_t size;
+      if (matchPattern(en.value(), m_TorchConstantInt(&size))) {
+        resultShape[en.index()] = size;
+      }
+    }
+
+    SmallVector<int64_t> collapsedShape =
+        isCollapse ? resultShape : llvm::to_vector(inputShape);
+    SmallVector<int64_t> expandedShape =
+        isCollapse ? llvm::to_vector(inputShape) : resultShape;
+    int64_t lhsDim = 0, rhsDim = 0;
+    while (lhsDim < collapsedRank && rhsDim < expandedRank) {
+      if (!reassociation[lhsDim].empty()) {
+        lhsDim++;
+        rhsDim++;
+        continue;
+      }
+      SmallVector<int64_t> vlhs;
+      while (lhsDim < collapsedRank && reassociation[lhsDim].empty()) {
+        vlhs.push_back(lhsDim);
+        lhsDim++;
+      }
+      // the next reassociation contains atenSizeInt(input, dim)
+      int64_t rhsDimNext =
+          lhsDim != collapsedRank ? reassociation[lhsDim][0] : expandedRank;
+      if (vlhs.size() == 1) {
+        int64_t collapsedDimSize = 1;
+        int64_t collapsedDim = vlhs[0];
+        for (auto i : llvm::seq<int64_t>(rhsDim, rhsDimNext)) {
+          reassociation[collapsedDim].push_back(i);
+          int64_t expandedDimSize = expandedShape[i];
+          if (collapsedDimSize != kUnknownSize &&
+              expandedDimSize != kUnknownSize)
+            collapsedDimSize *= expandedShape[i];
+          else
+            collapsedDimSize = kUnknownSize;
+        }
+        if (collapsedDimSize != kUnknownSize)
+          collapsedShape[collapsedDim] = collapsedDimSize;
+      } else if (vlhs.size() != 0) {
+        // dims in vlhs => [rhsDim, nextRhsDim}
+      }
+      rhsDim = rhsDimNext;
+    }
+
     // Check if the `aten.View` can be legalized to `linalg.TensorExpandShape`.
     // It only handles the case of static dimension expansion. If the dimension
     // is dynamic, it must not be expanded/splitted.
     // TODO: Handle the case of dynamic dimension expansion.
-    SmallVector<ReassociationIndices> reassociation(inputRank);
-    SmallVector<int64_t> resultShape;
-    int64_t j = 0;
-    for (auto i : llvm::seq<int64_t>(0, inputRank)) {
-      if (inputType.isDynamicDim(i)) {
-        Value dim = getDimOp(rewriter, loc, input, i);
-        if (j >= resultRank) {
-          return rewriter.notifyMatchFailure(
-              op, "desired size is not compatible with the input tensor size");
-        }
-        checkDimEqualHelper(rewriter, loc, dim, expectedSize[j]);
-        reassociation[i].push_back(j++);
-        resultShape.push_back(kUnknownSize);
-      } else {
-        int64_t expandedDim = inputType.getDimSize(i);
-        int64_t outputDim;
-        // A do-while loop is used here to handle the cases where the input
-        // tensor has a dimension of size 1.
-        do {
-          if (j >= resultRank ||
-              !matchPattern(expectedSizeTorchInt[j],
-                            m_TorchConstantInt(&outputDim)) ||
-              expandedDim % outputDim != 0) {
-            return rewriter.notifyMatchFailure(
-                op, "total number of elements mismatch in the expansion");
-          }
-          reassociation[i].push_back(j++);
-          resultShape.push_back(outputDim);
-          expandedDim /= outputDim;
-        } while (expandedDim != 1);
-      }
-    }
-    // Make sure that the splitted dimensions have the same number of elements
-    // as the dimension got splitted from.
-    if (j != resultRank)
-      return rewriter.notifyMatchFailure(
-          op, "desired size is not compatible with the input tensor size");
+    // SmallVector<int64_t> resultShape;
+    // int64_t j = 0;
+    // for (auto i : llvm::seq<int64_t>(0, inputRank)) {
+    //   if (inputType.isDynamicDim(i)) {
+    //     Value dim = getDimOp(rewriter, loc, input, i);
+    //     if (j >= resultRank) {
+    //       return rewriter.notifyMatchFailure(
+    //           op, "desired size is not compatible with the input tensor
+    //           size");
+    //     }
+    //     checkDimEqualHelper(rewriter, loc, dim, expectedSize[j]);
+    //     reassociation[i].push_back(j++);
+    //     resultShape.push_back(kUnknownSize);
+    //   } else {
+    //     int64_t expandedDim = inputType.getDimSize(i);
+    //     int64_t outputDim;
+    //     // A do-while loop is used here to handle the cases where the input
+    //     // tensor has a dimension of size 1.
+    //     do {
+    //       if (j >= resultRank ||
+    //           !matchPattern(expectedSizeTorchInt[j],
+    //                         m_TorchConstantInt(&outputDim)) ||
+    //           expandedDim % outputDim != 0) {
+    //         return rewriter.notifyMatchFailure(
+    //             op, "total number of elements mismatch in the expansion");
+    //       }
+    //       reassociation[i].push_back(j++);
+    //       resultShape.push_back(outputDim);
+    //       expandedDim /= outputDim;
+    //     } while (expandedDim != 1);
+    //   }
+    // }
+    // // Make sure that the splitted dimensions have the same number of
+    // elements
+    // // as the dimension got splitted from.
+    // if (j != resultRank)
+    //   return rewriter.notifyMatchFailure(
+    //       op, "desired size is not compatible with the input tensor size");
 
-    Type expandType =
-        RankedTensorType::get(resultShape, resultType.getElementType());
-    Value expandOp = rewriter.create<linalg::TensorExpandShapeOp>(
-        loc, expandType, adaptor.self(), reassociation);
-    rewriter.replaceOpWithNewOp<tensor::CastOp>(op, resultType, expandOp);
+    Type refinedResultType =
+        RankedTensorType::get(isCollapse ? collapsedShape : expandedShape,
+                              resultType.getElementType());
+    Type castInputType =
+        RankedTensorType::get(isCollapse ? expandedShape : collapsedShape,
+                              resultType.getElementType());
+    Value castedInput =
+        rewriter.create<tensor::CastOp>(loc, castInputType, adaptor.self());
+    Value result;
+    if (isCollapse) {
+      result = rewriter.create<linalg::TensorCollapseShapeOp>(
+          loc, refinedResultType, castedInput, reassociation);
+    } else {
+      result = rewriter.create<linalg::TensorExpandShapeOp>(
+          loc, refinedResultType, castedInput, reassociation);
+    }
+    rewriter.replaceOpWithNewOp<tensor::CastOp>(op, resultType, result);
     return success();
   }
 };
