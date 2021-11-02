@@ -224,7 +224,7 @@ def TransposeIntModule_basic(module, tu: TestUtils):
 class PermuteModule(torch.nn.Module):
     def __init__(self):
         super().__init__()
-    
+
     @export
     @annotate_args([
         None,
@@ -258,7 +258,7 @@ def TransposeIntNegDimsModule_basic(module, tu: TestUtils):
 class PermuteNegativeIndexModule(torch.nn.Module):
     def __init__(self):
         super().__init__()
-    
+
     @export
     @annotate_args([
         None,
@@ -371,10 +371,29 @@ def EmbeddingModule_basic(module, tu: TestUtils):
     module.forward(torch.randint(100, (3, 3)))
 
 
-class SoftmaxIntModule(torch.nn.Module):
+class SoftmaxBackwardModule(torch.nn.Module):
     def __init__(self):
         super().__init__()
         torch.manual_seed(0)
+
+
+    @export
+    @annotate_args([
+        None,
+        ([-1, -1, -1], torch.float32, True),
+        ([-1, -1, -1], torch.float32, True),
+    ])
+    def forward(self, grad_output, output):
+        return torch.ops.aten._softmax_backward_data(grad_output, output, dim=1, input_dtype=6)
+
+@register_test_case(module_factory=lambda: SoftmaxBackwardModule())
+def SoftmaxBackwardModule_basic(module, tu: TestUtils):
+    module.forward(torch.randn(3, 2, 4), torch.randn(3, 2, 4))
+
+
+class SoftmaxIntModule(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
         self.softmax = torch.nn.Softmax(2)
 
     @export
@@ -509,7 +528,7 @@ class ContiguousModule(torch.nn.Module):
 @register_test_case(module_factory=lambda: ContiguousModule())
 def ContiguousModule_basic(module, tu: TestUtils):
     module.forward(tu.rand(3, 1))
-    
+
 class TensorToInt(torch.nn.Module):
     def __init__(self):
         super().__init__()

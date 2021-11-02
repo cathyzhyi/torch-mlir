@@ -1253,6 +1253,8 @@ public:
 
 
 static Value promoteScalarToDtype(OpBuilder &b, Location loc, Value scalar, Type dtype) {
+  if (scalar.getType() == dtype)
+    return scalar;
   // TODO: For the integer case, we probably need the unconverted dtype to
   // be able to know if we need signed or unsigned conversion.
   if (dtype.isa<mlir::FloatType>()) {
@@ -1316,40 +1318,29 @@ static Value createLinalgPayloadCalculationForElementwiseOp(
   }
   if (auto add = dyn_cast<AtenAddTensorOp>(op)) {
     AtenAddTensorOp::Adaptor adaptor(operands);
-    if (add.alpha().getType().isa<Torch::FloatType>()) {
-      add.emitError("unimplemented: !torch.float 'alpha'");
-      return nullptr;
-    }
-    if (!add.getType()
-             .cast<ValueTensorType>()
-             .getDtype()
-             .isa<mlir::FloatType>()) {
+    Type dtype = add.getType().cast<ValueTensorType>().getDtype();
+    if (!dtype.isa<mlir::FloatType>()) {
       add.emitError("unimplemented: non-floating point dtype");
       return nullptr;
     }
-    Value alphaFloat = b.create<arith::SIToFPOp>(loc, payloadArgs[0].getType(),
-                                                 adaptor.alpha());
-    Value scaled = b.create<arith::MulFOp>(loc, payloadArgs[1], alphaFloat);
-    return b.create<arith::AddFOp>(loc, payloadArgs[0], scaled);
+    Value lhs = promoteScalarToDtype(b, loc, payloadArgs[0], dtype);
+    Value rhs = promoteScalarToDtype(b, loc, payloadArgs[1], dtype);
+    Value alpha = promoteScalarToDtype(b, loc, adaptor.alpha(), dtype);
+    Value scaled = b.create<arith::MulFOp>(loc, rhs, alpha);
+    return b.create<arith::AddFOp>(loc, lhs, scaled);
   }
   if (auto sub = dyn_cast<AtenSubTensorOp>(op)) {
     AtenSubTensorOp::Adaptor adaptor(operands);
-    if (sub.alpha().getType().isa<Torch::FloatType>()) {
-      sub.emitError("unimplemented: !torch.float 'alpha'");
-      return nullptr;
-    }
-    if (!sub.getType()
-             .cast<ValueTensorType>()
-             .getDtype()
-             .isa<mlir::FloatType>()) {
+    Type dtype = sub.getType().cast<ValueTensorType>().getDtype();
+    if (!dtype.isa<mlir::FloatType>()) {
       sub.emitError("unimplemented: non-floating point dtype");
       return nullptr;
     }
-    Value alphaFloat = b.create<arith::SIToFPOp>(loc, payloadArgs[0].getType(),
-                                                 adaptor.alpha());
-    Value scaled = b.create<arith::MulFOp>(loc, payloadArgs[1], alphaFloat);
-
-    return b.create<arith::SubFOp>(loc, payloadArgs[0], scaled);
+    Value lhs = promoteScalarToDtype(b, loc, payloadArgs[0], dtype);
+    Value rhs = promoteScalarToDtype(b, loc, payloadArgs[1], dtype);
+    Value alpha = promoteScalarToDtype(b, loc, adaptor.alpha(), dtype);
+    Value scaled = b.create<arith::MulFOp>(loc, rhs, alpha);
+    return b.create<arith::SubFOp>(loc, lhs, scaled);
   }
   if (auto mul = dyn_cast<AtenMulTensorOp>(op)) {
     if (!mul.getType()
@@ -2122,7 +2113,7 @@ public:
     }
     SmallVector<Value> expectedSize = getTypeConvertedValues(
         rewriter, loc, typeConverter, expectedSizeTorchInt);
-    if (expectedSize.size() != resultRank) {
+    if (resultRank != (int64_t)expectedSize.size()) {
       return rewriter.notifyMatchFailure(
           op, "desired size list length mismatches with the result type rank");
     }
