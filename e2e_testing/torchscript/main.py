@@ -33,6 +33,7 @@ from . import conv
 from . import batchnorm
 from . import quantized_models
 from . import elementwise
+from . import typepromotion
 from . import reduction
 from . import argmax
 from . import matmul
