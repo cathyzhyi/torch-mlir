@@ -2311,15 +2311,23 @@ public:
         int64_t collapsedDim = vlhs[0];
         for (auto i : llvm::seq<int64_t>(rhsDim, rhsDimNext)) {
           reassociation[collapsedDim].push_back(i);
+          if (collapsedDimSize == kUnknownSize)
+            continue;
+
           int64_t expandedDimSize = expandedShape[i];
-          if (collapsedDimSize != kUnknownSize &&
-              expandedDimSize != kUnknownSize)
-            collapsedDimSize *= expandedShape[i];
-          else
+          if (expandedDimSize == kUnknownSize) {
             collapsedDimSize = kUnknownSize;
+            continue;
+          }
+          collapsedDimSize *= expandedShape[i];
         }
-        if (collapsedDimSize != kUnknownSize)
-          collapsedShape[collapsedDim] = collapsedDimSize;
+        // Set to collapsedDimSize unconditionally because tensor reshape op
+        // requires:
+        // 1. As long as one or more of the dimensions related is dynamic the
+        // collapsed dimension is dynamic.
+        // 2. If all of the related dimensions are static, the collapsed
+        // dimension must be static.
+        collapsedShape[collapsedDim] = collapsedDimSize;
       } else if (vlhs.size() != 0) {
         // dims in vlhs => [rhsDim, nextRhsDim}
       }
@@ -2369,21 +2377,21 @@ public:
     //   return rewriter.notifyMatchFailure(
     //       op, "desired size is not compatible with the input tensor size");
 
-    Type refinedResultType =
+    Type adjustedResultType =
         RankedTensorType::get(isCollapse ? collapsedShape : expandedShape,
                               resultType.getElementType());
-    Type castInputType =
+    Type adjustedInputType =
         RankedTensorType::get(isCollapse ? expandedShape : collapsedShape,
                               resultType.getElementType());
     Value castedInput =
-        rewriter.create<tensor::CastOp>(loc, castInputType, adaptor.self());
+        rewriter.create<tensor::CastOp>(loc, adjustedInputType, adaptor.self());
     Value result;
     if (isCollapse) {
       result = rewriter.create<linalg::TensorCollapseShapeOp>(
-          loc, refinedResultType, castedInput, reassociation);
+          loc, adjustedResultType, castedInput, reassociation);
     } else {
       result = rewriter.create<linalg::TensorExpandShapeOp>(
-          loc, refinedResultType, castedInput, reassociation);
+          loc, adjustedResultType, castedInput, reassociation);
     }
     rewriter.replaceOpWithNewOp<tensor::CastOp>(op, resultType, result);
     return success();
