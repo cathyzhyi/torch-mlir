@@ -132,8 +132,13 @@ static Value castIndexToInt(OpBuilder &b, Location loc, Value idx) {
   return b.create<arith::IndexCastOp>(loc, b.getI64Type(), idx);
 }
 
-static Value getDimOp(OpBuilder &b, Location loc, Value v, int dimension) {
-  return b.create<tensor::DimOp>(loc, v, dimension);
+static Value getDimOp(OpBuilder &b, Location loc, Value v, int dim) {
+  if (auto tensorType = v.getType().cast<RankedTensorType>()) {
+    if (!tensorType.isDynamicDim(dim))
+      return b.create<arith::ConstantOp>(
+          loc, b.getIndexAttr(tensorType.getShape()[dim]));
+  }
+  return b.create<tensor::DimOp>(loc, v, dim);
 }
 
 static void checkDimEqualHelper(OpBuilder &b, Location loc, Value lhsDim,
@@ -2266,6 +2271,9 @@ public:
       return rewriter.notifyMatchFailure(
           op, "desired size list length mismatches with the result type rank");
     }
+    SmallVector<Value> srcSizeTorchInt = getTensorSizes(rewriter, loc, input);
+    ArrayRef<Value> expandedShapeTorchInt = llvm::makeArrayRef(isCollapse? srcSizeTorchInt: expectedSize);
+    ArrayRef<Value> collapsedShapeTorchInt = llvm::makeArrayRef(isCollapse? expectedSize: srcSizeTorchInt);
 
     SmallVector<int64_t> resultShape(resultRank, kUnknownSize);
     SmallVector<ReassociationIndices> reassociation(collapsedRank);
@@ -2298,17 +2306,17 @@ public:
         rhsDim++;
         continue;
       }
-      SmallVector<int64_t> vlhs;
+      SmallVector<int64_t> lhsDims;
       while (lhsDim < collapsedRank && reassociation[lhsDim].empty()) {
-        vlhs.push_back(lhsDim);
+        lhsDims.push_back(lhsDim);
         lhsDim++;
       }
       // the next reassociation contains atenSizeInt(input, dim)
       int64_t rhsDimNext =
           lhsDim != collapsedRank ? reassociation[lhsDim][0] : expandedRank;
-      if (vlhs.size() == 1) {
+      if (lhsDims.size() == 1) {
         int64_t collapsedDimSize = 1;
-        int64_t collapsedDim = vlhs[0];
+        int64_t collapsedDim = lhsDims[0];
         for (auto i : llvm::seq<int64_t>(rhsDim, rhsDimNext)) {
           reassociation[collapsedDim].push_back(i);
           if (collapsedDimSize == kUnknownSize)
@@ -2328,12 +2336,45 @@ public:
         // 2. If all of the related dimensions are static, the collapsed
         // dimension must be static.
         collapsedShape[collapsedDim] = collapsedDimSize;
-      } else if (vlhs.size() != 0) {
-        // dims in vlhs => [rhsDim, nextRhsDim}
+        rhsDim = rhsDimNext;
+        continue;
+      } 
+
+      // dims in vlhs are expanded to [rhsDim, rhsDimNext}
+      if (rhsDimNext - rhsDim < (int64_t)lhsDims.size())
+        op.emitError("unimplemented: mixed of expanding and collapsing "
+                     "operations for view");
+      for (auto lhsDim : lhsDims) {
+        if (collapsedShape[lhsDim] == kUnknownSize) {
+          if (rhsDim >= rhsDimNext) {
+            return rewriter.notifyMatchFailure(
+                op,
+                "desired size is not compatible with the input tensor size");
+          }
+          checkDimEqualHelper(rewriter, loc, collapsedShapeTorchInt[lhsDim],
+                              expandedShapeTorchInt[rhsDim]);
+          reassociation[lhsDim].push_back(rhsDim++);
+        } else {
+          int64_t collapsedShapeSize = collapsedShape[lhsDim];
+          int64_t expandedDim = expandedShape[rhsDim];
+          // A do-while loop is used here to handle the cases where the
+          // collapsed shape tensor has a dimension of size 1.
+          do {
+            if (rhsDim >= rhsDimNext || expandedShape[rhsDim] == kUnknownSize ||
+                collapsedShapeSize % expandedDim != 0) {
+              return rewriter.notifyMatchFailure(
+                  op, "total number of elements mismatch in the expansion");
+            }
+            reassociation[lhsDim].push_back(rhsDim++);
+            collapsedShapeSize /= expandedDim;
+          } while (collapsedShapeSize != 1);
+        }
       }
-      rhsDim = rhsDimNext;
     }
 
+    if (lhsDim != collapsedRank || rhsDim != expandedRank)
+       return rewriter.notifyMatchFailure(
+           op, "view shape is not supported");
     // Check if the `aten.View` can be legalized to `linalg.TensorExpandShape`.
     // It only handles the case of static dimension expansion. If the dimension
     // is dynamic, it must not be expanded/splitted.
