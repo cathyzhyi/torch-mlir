@@ -113,6 +113,7 @@ public:
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<StandardOpsDialect>();
     registry.insert<arith::ArithmeticDialect>();
+    registry.insert<tensor::TensorDialect>();
     TorchConversion::getBackendTypeConversionDependentDialects(registry);
   }
 
