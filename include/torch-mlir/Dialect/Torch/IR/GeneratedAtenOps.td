@@ -3704,6 +3704,21 @@ def Torch_AtenNegFloatOp : Torch_Op<"aten.neg.float", [
   let assemblyFormat = "$a attr-dict `:` qualified(type($a)) `->` qualified(type($result))";
 }
 
+def Torch_AtenDivOp : Torch_Op<"aten.div", [
+    AllowsTypeRefinement,
+    HasValueSemantics
+  ]> {
+  let summary = "Generated op for `aten::div : (Scalar, Scalar) -> (float)`";
+  let arguments = (ins
+    AnyTorchScalarType:$a,
+    AnyTorchScalarType:$b
+  );
+  let results = (outs
+    Torch_FloatType:$result
+  );
+  let assemblyFormat = "$a `,` $b attr-dict `:` qualified(type($a)) `,` qualified(type($b)) `->` qualified(type($result))";
+}
+
 def Torch_AtenEqFloatOp : Torch_Op<"aten.eq.float", [
     AllowsTypeRefinement,
     HasValueSemantics
@@ -3845,6 +3860,20 @@ def Torch_Aten__Not__Op : Torch_Op<"aten.__not__", [
   let hasFolder = 1;
 }
 
+def Torch_AtenIntScalarOp : Torch_Op<"aten.Int.Scalar", [
+    AllowsTypeRefinement,
+    HasValueSemantics
+  ]> {
+  let summary = "Generated op for `aten::Int.Scalar : (Scalar) -> (int)`";
+  let arguments = (ins
+    AnyTorchScalarType:$a
+  );
+  let results = (outs
+    Torch_IntType:$result
+  );
+  let assemblyFormat = "$a attr-dict `:` qualified(type($a)) `->` qualified(type($result))";
+}
+
 def Torch_AtenLenTOp : Torch_Op<"aten.len.t", [
     AllowsTypeRefinement,
     HasValueSemantics
@@ -3889,21 +3918,6 @@ def Torch_Aten_SetItemTOp : Torch_Op<"aten._set_item.t", [
     AnyTorchListType:$result
   );
   let assemblyFormat = "$l `,` $idx `,` $el attr-dict `:` qualified(type($l)) `,` qualified(type($idx)) `,` qualified(type($el)) `->` qualified(type($result))";
-}
-
-def Torch_AtenDivOp : Torch_Op<"aten.div", [
-    AllowsTypeRefinement,
-    HasValueSemantics
-  ]> {
-  let summary = "Generated op for `aten::div : (Scalar, Scalar) -> (float)`";
-  let arguments = (ins
-    AnyTorchScalarType:$a,
-    AnyTorchScalarType:$b
-  );
-  let results = (outs
-    Torch_FloatType:$result
-  );
-  let assemblyFormat = "$a `,` $b attr-dict `:` qualified(type($a)) `,` qualified(type($b)) `->` qualified(type($result))";
 }
 
 def Torch_AtenEqDeviceOp : Torch_Op<"aten.eq.device", [

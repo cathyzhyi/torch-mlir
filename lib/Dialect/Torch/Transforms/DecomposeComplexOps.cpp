@@ -35,6 +35,17 @@ static int getTensorRank(Value tensor) {
   return tensorRank;
 }
 
+static Value getConstantInt(OpBuilder &b, Location loc, int64_t value) {
+  return b.create<ConstantIntOp>(loc, b.getI64IntegerAttr(value));
+}
+
+/// Return a type of the same kind as tensorType, but with given sizes.
+static Type getTensorTypeWithSizes(BaseTensorType tensorType,
+                                   ArrayRef<int64_t> sizes, bool hasSizes) {
+  return tensorType.getWithSizesAndDtype(
+      hasSizes ? sizes : Optional<ArrayRef<int64_t>>(), tensorType.getDtype());
+}
+
 // Helper function to compute the return type of the reduction function.
 // `dim` specifies the dimension to reduce and `keepDim` preserves the rank of
 // the input tensor.
@@ -65,10 +76,8 @@ static Type computeReductionType(PatternRewriter &rewriter, Operation *op,
     }
   }
 
-  Type resultType = tensorType.getWithSizesAndDtype(
-      sizes.size() == 0 ? Optional<ArrayRef<int64_t>>()
-                        : llvm::makeArrayRef(sizes),
-      tensorType.getDtype());
+  Type resultType =
+      getTensorTypeWithSizes(tensorType, sizes, tensorType.hasSizes());
   return resultType;
 }
 
@@ -1308,6 +1317,96 @@ class DecomposeConstantTensorNewLikeOp : public OpRewritePattern<OpTy> {
 };
 } // namespace
 
+class DecomposeAtenConv2dOp : public OpRewritePattern<AtenConv2dOp> {
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(AtenConv2dOp op,
+                                PatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *context = op.getContext();
+    Value input = op.input();
+    Value groups = op.groups();
+    Value weight = op.weight();
+
+    int64_t groupsNum;
+    if (!matchPattern(op.groups(), m_TorchConstantInt(&groupsNum)))
+      return rewriter.notifyMatchFailure(op, "groups must be constant");
+
+    Value one = getConstantInt(rewriter, loc, 1);
+    Value zero = getConstantInt(rewriter, loc, 0);
+
+    // Calculate the group size along Cin or Cout dimension.
+    auto getGroupSize = [&](Value size) {
+      Value groupSize = rewriter.create<AtenDivOp>(loc, size, groups);
+      groupSize = rewriter.create<AtenIntScalarOp>(
+          loc, Torch::IntType::get(context), groupSize);
+
+      // `size` must be divisible by `groups`.
+      // assert(groupSize * groups == size)
+      Value mul = rewriter.create<AtenMulIntOp>(loc, groups.getType(),
+                                                groupSize, groups);
+      Value eqPred = rewriter.create<AtenEqIntOp>(
+          loc, Torch::BoolType::get(context), mul, size);
+      rewriter.create<RuntimeAssertOp>(
+          loc, eqPred,
+          rewriter.getStringAttr("Cin and Cout must be divisible by groups"));
+      return groupSize;
+    };
+
+    Value Cin = rewriter.create<AtenSizeIntOp>(loc, input, one);
+    Value groupCinSize = getGroupSize(Cin);
+    Value Cout = rewriter.create<AtenSizeIntOp>(loc, weight, zero);
+    Value groupCoutSize = getGroupSize(Cout);
+
+    auto getSlicedType = [](Value tensor, int dim) {
+      SmallVector<int64_t> sliceInputSize;
+      BaseTensorType tensorType = tensor.getType().cast<BaseTensorType>();
+      ArrayRef<int64_t> weightSizes = tensorType.getSizes();
+      SmallVector<int64_t> sliceWeightCoutSize;
+      if (tensorType.hasSizes()) {
+        sliceInputSize.append(weightSizes.begin(), weightSizes.end());
+        sliceInputSize[dim] = ShapedType::kDynamicSize;
+      }
+      return getTensorTypeWithSizes(tensorType, sliceInputSize,
+                                    tensorType.hasSizes());
+    };
+    Type sliceInputType = getSlicedType(input, /*dim=*/1);
+    Type sliceWeightCoutType = getSlicedType(input, /*dim=*/0);
+    Type sliceOutputCoutType = getSlicedType(op.getResult(), /*dim=*/1);
+
+    Value startCout = zero;
+    Value startCin = zero;
+    auto getEnd = [&](Value start, Value stride) {
+      return rewriter.create<AtenAddIntOp>(loc, start.getType(), start, stride);
+    };
+
+    SmallVector<Value> outputs;
+    for (int i = 0; i < groupsNum; i++) {
+      Value endCin = getEnd(startCin, groupCinSize);
+      Value endCout = getEnd(startCout, groupCoutSize);
+
+      // groupInput = input[:, startCin: endCin, :, :, :]
+      Value groupInput = rewriter.create<AtenSliceTensorOp>(
+          loc, sliceInputType, input, /*dim=*/one, startCin, endCin,
+          /*step=*/one);
+
+      // groupWeight = weight[startCout: endCout, :, :, :]
+      Value groupWeight = rewriter.create<AtenSliceTensorOp>(
+          loc, sliceWeightCoutType, weight, /*dim=*/zero, startCout, endCout,
+          /*step=*/one);
+      Value groupOut = rewriter.create<AtenConv2dOp>(
+          loc, sliceOutputCoutType, groupInput, groupWeight, op.bias(),
+          op.stride(), op.padding(), op.dilation(), /*groups=*/one);
+
+      outputs.push_back(groupOut);
+      startCout = endCout;
+      startCin = endCin;
+    }
+
+    Value outputsList = rewriter.create<PrimListConstructOp>(
+        loc, ListType::get(context, outputs.back().getType()),
+        ValueRange(outputs));
+    rewriter.replaceOpWithNewOp<AtenCatOp>(op, op.getType(), outputsList, one);
+
 namespace {
 class DecomposeComplexOpsPass
     : public DecomposeComplexOpsBase<DecomposeComplexOpsPass> {
@@ -1361,8 +1460,16 @@ class DecomposeComplexOpsPass
       // Make aten.matmul legal if the following condition is satisfied.
       return (lhsRank != 2 || rhsRank != 2) && (lhsRank != 3 || rhsRank != 3);
     });
+
     patterns.add<DecomposeAtenAddCLikeOp<AtenAddcmulOp, AtenMulTensorOp>>(
         context);
+    patterns.add<DecomposeAtenConv2dOp>(context);
+    target.addDynamicallyLegalOp<AtenConv2dOp>([](AtenConv2dOp op) {
+      int64_t groups;
+      if (matchPattern(op.groups(), m_TorchConstantInt(&groups)))
+        return groups == 1;
+      return false;
+    });
     target.addIllegalOp<AtenAddcmulOp>();
     patterns.add<DecomposeAtenAddCLikeOp<AtenAddcdivOp, AtenDivTensorOp>>(
         context);

@@ -678,6 +678,7 @@ def emit_aten_ops(torch_ir_dir: str, registry: Registry):
         emit("aten::add.float_int : (float, int) -> (float)")
         emit("aten::mul.float : (float, float) -> (float)")
         emit("aten::neg.float : (float) -> (float)")
+        emit("aten::div : (Scalar, Scalar) -> (float)")
         emit("aten::eq.float : (float, float) -> (bool)", has_folder=True)
         emit("aten::gt.float : (float, float) -> (bool)", has_folder=True)
         emit("aten::lt.float : (float, float) -> (bool)", has_folder=True)
@@ -687,12 +688,12 @@ def emit_aten_ops(torch_ir_dir: str, registry: Registry):
         emit("aten::__is__ : (t1, t2) -> (bool)", has_folder=True)
         emit("aten::__isnot__ : (t1, t2) -> (bool)", has_folder=True)
         emit("aten::__not__ : (bool) -> (bool)", has_folder=True)
+        emit("aten::Int.Scalar : (Scalar) -> (int)")
         emit("aten::len.t : (t[]) -> (int)",
              has_folder=True,
              has_canonicalizer=True)
         emit("aten::__getitem__.t : (t[], int) -> (t)", has_canonicalizer=True)
         emit("aten::_set_item.t : (t[], int, t) -> (t[])")
-        emit("aten::div : (Scalar, Scalar) -> (float)")
         emit("aten::eq.device : (Device, Device) -> (bool)")
 
         # backprop ops

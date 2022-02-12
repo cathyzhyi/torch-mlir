@@ -15,6 +15,7 @@
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/Traits.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "torch-mlir/Conversion/Utils/Utils.h"
 #include "torch-mlir/Dialect/Torch/IR/TorchDialect.h"
 #include "torch-mlir/Dialect/Torch/IR/TorchOps.h"
 #include "torch-mlir/Dialect/TorchConversion/IR/TorchConversionDialect.h"
@@ -69,7 +70,11 @@ public:
   matchAndRewrite(AtenOp op,
                   typename OpConversionPattern<AtenOp>::OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    rewriter.template replaceOpWithNewOp<BinOp>(op, adaptor.a(), adaptor.b());
+    Location loc = op.getLoc();
+    Type dtype = this->getTypeConverter()->convertType(op.getType());
+    Value convertedA = convertScalarToDtype(rewriter, loc, adaptor.a(), dtype);
+    Value convertedB = convertScalarToDtype(rewriter, loc, adaptor.b(), dtype);
+    rewriter.template replaceOpWithNewOp<BinOp>(op, convertedA, convertedB);
     return success();
   }
 };
@@ -87,6 +92,23 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     rewriter.replaceOpWithNewOp<arith::CmpIOp>(op, Pred, adaptor.a(),
                                                adaptor.b());
+    return success();
+  }
+};
+} // namespace
+
+namespace {
+template <typename OpTy>
+class ConvertAtenIntScalarOp : public OpConversionPattern<OpTy> {
+public:
+  using OpConversionPattern<OpTy>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(OpTy op,
+                  typename OpConversionPattern<OpTy>::OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Type intType = this->getTypeConverter()->convertType(op.getType());
+    rewriter.replaceOp(
+        op, convertScalarToDtype(rewriter, op->getLoc(), adaptor.a(), intType));
     return success();
   }
 };
@@ -203,13 +225,20 @@ public:
     target.addIllegalOp<Torch::ConstantIntOp>();
     patterns.add<ConvertTorchConstantOp<Torch::ConstantIntOp>>(typeConverter,
                                                                context);
-    target.addIllegalOp<AtenAddIntOp, AtenSubIntOp, AtenMulIntOp>();
+
+    target.addIllegalOp<AtenAddIntOp, AtenSubIntOp, AtenMulIntOp, AtenDivOp>();
     patterns.add<ConvertAtenBinaryOp<AtenAddIntOp, arith::AddIOp>>(
         typeConverter, context);
     patterns.add<ConvertAtenBinaryOp<AtenSubIntOp, arith::SubIOp>>(
         typeConverter, context);
     patterns.add<ConvertAtenBinaryOp<AtenMulIntOp, arith::MulIOp>>(
         typeConverter, context);
+    patterns.add<ConvertAtenBinaryOp<AtenDivOp, arith::DivFOp>>(typeConverter,
+                                                                context);
+
+    target.addIllegalOp<AtenIntScalarOp>();
+    patterns.add<ConvertAtenIntScalarOp<AtenIntScalarOp>>(typeConverter,
+                                                          context);
 
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns))))
