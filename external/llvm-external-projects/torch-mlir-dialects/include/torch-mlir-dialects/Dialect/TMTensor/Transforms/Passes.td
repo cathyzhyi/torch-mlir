@@ -18,4 +18,9 @@ def TMTensorToLoops :
   let constructor = "mlir::torch::TMTensor::createTMTensorToLoopsPass()";
 }
 
+def TMTensorBufferize : Pass<"torch-mlir-tm-tensor-bufferize", "FuncOp"> {
+  let summary = "Bufferize the TMTensor dialect";
+  let constructor = "mlir::torch::TMTensor::createTMTensorBufferizePass()";
+}
+
 #endif  // TORCH_MLIR_DIALECT_TMTENSOR_PASSES
