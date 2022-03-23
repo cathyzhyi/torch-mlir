@@ -134,8 +134,8 @@ class IndexPutImpl1DFloatAccumulateModule(torch.nn.Module):
     ])
     def forward(self, input, index, value):
       return torch.ops.aten._index_put_impl_(input, (index,), value,
-                                            accumulate=True,
-                                            unsafe=False)
+                                          accumulate=True,
+                                          unsafe=False)
 
 
 @register_test_case(
@@ -212,8 +212,8 @@ class IndexPutImpl1DIntAccumulateModule(torch.nn.Module):
     ])
     def forward(self, input, index, value):
       return torch.ops.aten._index_put_impl_(input, (index,), value,
-                                          accumulate=True,
-                                          unsafe=False)
+                                            accumulate=True,
+                                            unsafe=False)
 
 
 @register_test_case(module_factory=lambda: IndexPutImpl1DIntAccumulateModule())
